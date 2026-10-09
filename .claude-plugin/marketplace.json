@@ -1,0 +1,5 @@
+{
+  "name": "watchdog-local",
+  "owner": { "name": "godstale" },
+  "plugins": [{ "name": "watchdog", "source": "./" }]
+}

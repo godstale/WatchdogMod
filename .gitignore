@@ -1,0 +1,13 @@
+# Local type declarations copied from the Claude Code SDK (regenerated, never committed)
+.claude-plugin/types/
+
+# Dependencies and tool caches
+node_modules/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.log

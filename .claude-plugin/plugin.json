@@ -1,0 +1,11 @@
+{
+  "name": "watchdog",
+  "version": "0.2.1",
+  "description": "Watch Dog: live agent/sub-agent/usage dashboard above the prompt, plus the /wd command to inject requests mid-task, pause/resume it and stop it gracefully, and /wd-log, /wd-help.",
+  "author": { "name": "godstale", "url": "https://github.com/godstale" },
+  "license": "MIT",
+  "homepage": "https://github.com/godstale/WatchdogMod",
+  "repository": "https://github.com/godstale/WatchdogMod",
+  "keywords": ["dashboard", "sub-agents", "pause", "resume", "stop", "monitoring", "usage"],
+  "types": "./types/index.d.ts"
+}
