@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { WdActive, WdAgent, WdLog, WdTodo, WdTurn, WdUsage, WdWait } from '../types'
+import type { WdActive, WdAgent, WdLog, WdTask, WdTodo, WdTurn, WdUsage, WdWait } from '../types'
 import { ART_WIDTH, dog, dogRows } from './art'
 import type { DogSize, PixelRow } from './art'
 import { helpFor } from './help'
@@ -23,6 +23,7 @@ const agentsA = atom({ plugin: 'watchdog', key: 'agents' } as const, {} as Recor
 const activeA = atom({ plugin: 'watchdog', key: 'active' } as const, {} as Record<string, WdActive>)
 const countsA = atom({ plugin: 'watchdog', key: 'counts' } as const, {} as Record<string, number>)
 const todosA = atom({ plugin: 'watchdog', key: 'todos' } as const, {} as Record<string, WdTodo>)
+const tasksA = atom({ plugin: 'watchdog', key: 'tasks' } as const, {} as Record<string, Record<string, WdTask>>)
 const stopsA = atom({ plugin: 'watchdog', key: 'stops' } as const, {} as Record<string, number>)
 const pausedA = atom({ plugin: 'watchdog', key: 'paused' } as const, {} as Record<string, number>)
 const logA = atom({ plugin: 'watchdog', key: 'log' } as const, {} as Record<string, WdLog[]>)
@@ -94,6 +95,12 @@ function briefOf(tool: string, i: Record<string, unknown>): string {
       return fit(s('query'), 26)
     case 'Agent':
       return fit(s('description'), 22)
+    case 'TaskCreate':
+      return fit(s('subject'), 22)
+    case 'TaskUpdate':
+      return fit(`#${s('taskId')} ${s('status')}`.trim(), 22)
+    case 'TaskGet':
+      return fit(`#${s('taskId')}`, 22)
     default:
       return fit(s('description') || s('file_path') || s('pattern') || s('query'), 22)
   }
@@ -116,6 +123,59 @@ function todoOf(input: Record<string, unknown>): WdTodo | undefined {
     total: todos.length,
     done: todos.filter(t => t.status === 'completed').length,
     current: fit(doing?.activeForm ?? doing?.content ?? '', 30),
+  }
+}
+
+// ---- the Task tools: their list is read from what they answer ----
+
+const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'])
+type Obj = Record<string, unknown>
+const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null
+const textOf = (o: Obj, k: string): string => (typeof o[k] === 'string' ? (o[k] as string) : '')
+
+/**
+ * The loop's task list after one Task call. TaskList answers the whole list, so it replaces the
+ * old one; the other calls change one task, and only when they succeeded.
+ */
+function applyTask(tasks: Record<string, WdTask>, tool: string, input: Obj, result: unknown): Record<string, WdTask> {
+  const res: Obj = isObj(result) ? result : {}
+  const out = { ...tasks }
+  if (tool === 'TaskList') {
+    const list = Array.isArray(res.tasks) ? res.tasks : []
+    const whole: Record<string, WdTask> = {}
+    for (const t of list.filter(isObj)) {
+      const id = textOf(t, 'id')
+      whole[id] = { subject: textOf(t, 'subject'), activeForm: tasks[id]?.activeForm ?? '', status: textOf(t, 'status') }
+    }
+    return whole
+  }
+  const one = (task: Obj): void => {
+    const id = textOf(task, 'id')
+    if (id === '') return
+    const prev = out[id]
+    out[id] = {
+      subject: textOf(task, 'subject') || prev?.subject || `#${id}`,
+      activeForm: textOf(task, 'activeForm') || prev?.activeForm || '',
+      status: textOf(task, 'status') || prev?.status || 'pending',
+    }
+  }
+  if (tool === 'TaskCreate' && isObj(res.task)) one({ ...res.task, activeForm: input.activeForm, status: 'pending' })
+  if (tool === 'TaskGet' && isObj(res.task)) one(res.task)
+  if (tool === 'TaskUpdate' && res.success === true) {
+    const id = textOf(input, 'taskId')
+    if (textOf(input, 'status') === 'deleted') delete out[id]
+    else one({ id, subject: input.subject, activeForm: input.activeForm, status: input.status })
+  }
+  return out
+}
+
+function progressOfTasks(tasks: Record<string, WdTask>): WdTodo {
+  const list = Object.values(tasks)
+  const doing = list.find(t => t.status === 'in_progress')
+  return {
+    total: list.length,
+    done: list.filter(t => t.status === 'completed').length,
+    current: fit(doing?.activeForm || doing?.subject || '', 30),
   }
 }
 
@@ -202,6 +262,15 @@ async function logEnd($: EngineInterface, key: string, id: string, state: WdLog[
     const list = m[key]
     return list === undefined ? m : { ...m, [key]: list.map(x => (x.id === id ? { ...x, state, endedAt } : x)) }
   })
+}
+
+async function taskAnswered($: EngineInterface, key: string, tool: string, input: Obj, result: unknown): Promise<void> {
+  let tasks: Record<string, WdTask> = {}
+  await update($, tasksA, m => {
+    tasks = applyTask(m[key] ?? {}, tool, input, result)
+    return { ...m, [key]: tasks }
+  })
+  await update($, todosA, m => ({ ...m, [key]: progressOfTasks(tasks) }))
 }
 
 async function syncAgents($: EngineInterface): Promise<void> {
@@ -424,6 +493,10 @@ export const register: Register = on => {
         const { main: _main, ...rest } = m
         return rest
       })
+      await update($, tasksA, m => {
+        const { main: _main, ...rest } = m
+        return rest
+      })
       await update($, sentA, () => 0)
       await update($, waitingA, () => ({}))
       await update($, stopsA, s => {
@@ -531,6 +604,7 @@ export const register: Register = on => {
     try {
       const ran = await next(e)
       if ('deny' in ran && ran.deny !== undefined) state = 'denied'
+      else if (TASK_TOOLS.has(e.tool)) await safe(() => taskAnswered($, key, e.tool, input, ran.result))
       return ran
     } finally {
       await safe(() =>

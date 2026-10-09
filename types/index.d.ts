@@ -12,6 +12,9 @@ export type WdTurn = {
 
 export type WdTodo = { done: number; total: number; current: string }
 
+/** One task of the Task tools (TaskCreate, TaskUpdate, TaskGet, TaskList), as the dashboard last saw it. */
+export type WdTask = { subject: string; activeForm: string; status: string }
+
 export type WdAgent = {
   id: string
   n: number
@@ -55,6 +58,8 @@ declare module 'claude-code' {
       active: Record<string, WdActive>
       counts: Record<string, number>
       todos: Record<string, WdTodo>
+      /** The Task tools' list of each loop (`main` or agent id), by task id. `todos` shows its progress. */
+      tasks: Record<string, Record<string, WdTask>>
       stops: Record<string, number>
       /** Loops held by `/wd pause`, by `main` or agent id, with the time the hold began. */
       paused: Record<string, number>
