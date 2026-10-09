@@ -1,5 +1,8 @@
 {
-  "name": "watchdog-local",
+  "name": "watchdog",
   "owner": { "name": "godstale" },
+  "metadata": {
+    "description": "Watch Dog: a live dashboard above the Claude Code prompt for the main agent and its sub-agents, with control while they run: inject a request, pause or resume one agent, or stop gracefully."
+  },
   "plugins": [{ "name": "watchdog", "source": "./" }]
 }

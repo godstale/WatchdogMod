@@ -44,6 +44,13 @@ Claude Code 2.1.275 이상에서:
 /plugin install watchdog --marketplace godstale/WatchdogMod
 ```
 
+마켓플레이스를 먼저 등록해 두고 설치할 수도 있습니다.
+
+```
+/plugin marketplace add godstale/WatchdogMod
+/plugin install watchdog@watchdog
+```
+
 설치 후 `/wd` 를 입력하면 도움말이 나옵니다. 대시보드를 바로 시험해 보려면 아래 `/wd-test` 항목을 참고하세요.
 
 ## 화면 구성 (3~7줄: 테두리 2줄 + 내용 1~5줄)
