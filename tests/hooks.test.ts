@@ -7,8 +7,12 @@ declare function setTimeout(run: () => void, ms: number): unknown
 const COMPOSER = { kind: 'composer' } as const
 const PRESENTATION = { isFullscreen: true, columns: 120 } as never
 
+/** What the engine answers for a tool call, by tool name; a test sets it to give a tool its result. */
+let answers: Record<string, unknown> = {}
+
 /** What the engine answers beneath the plugin, so the session can start. */
 function bottom(on: On) {
+  answers = {}
   mock.clock(on, { now: 1_000 })
   const session = mock.session(on)
   on('session.start', () => ({ cwd: '/' }))
@@ -19,7 +23,7 @@ function bottom(on: On) {
   on('agent.list', () => ({ value: [] }))
   on('command.register', () => ({ value: { command: 'wd' } }))
   on('turn.start', () => ({ turnId: 't1' }))
-  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('tool.call', (_$, e) => ({ result: answers[e.tool] ?? 'ran', text: 'ran' }) as never)
   return session
 }
 
@@ -282,4 +286,39 @@ test("a new turn does not show the last turn's todo progress", async ($, on) => 
   expect(await ui.find({ type: 'Text', text: /0\/2/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /Working/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('the Task tools drive the progress bar: TaskList sets it, TaskCreate and TaskUpdate change it', async ($, on) => {
+  bottom(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'first', turnId: 't1' })
+
+  answers.TaskList = {
+    tasks: [
+      { id: '1', subject: 'read the code', status: 'in_progress', blockedBy: [] },
+      { id: '2', subject: 'write tests', status: 'pending', blockedBy: [] },
+    ],
+  }
+  await $.tool.call({ tool: 'TaskList' })
+  let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /0\/2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /read the code/ })).toBeDefined()
+  await ui.unmount()
+
+  answers.TaskUpdate = { success: true, taskId: '1', updatedFields: ['status'] }
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' })
+  answers.TaskCreate = { task: { id: '3', subject: 'ship it' } }
+  await $.tool.call({ tool: 'TaskCreate', subject: 'ship it', description: 'merge and tag' })
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /1\/3/ })).toBeDefined()
+  await ui.unmount()
+
+  answers.TaskUpdate = { success: true, taskId: '3', updatedFields: ['status'] }
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '3', status: 'deleted' })
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /1\/2/ })).toBeDefined()
+  await ui.unmount()
+
+  const log = await $.command.run({ command: 'wd-log', args: '', origin: { kind: 'sdk' }, presentation: PRESENTATION })
+  expect(log.text).toContain('TaskUpdate #3 deleted')
 })
