@@ -536,6 +536,9 @@ export const register: Register = on => {
       )
       await safe(() => logEnd($, key, e.tool_use_id, state))
     }
+  }).catch((_$, e, next) => {
+    // this hook is what enforces pause and stop: if it fails before the call went on, the call is refused, not run
+    return next.called ? next(e) : { deny: `[Watch Dog] The pause/stop check failed, so ${e.tool} was not run. Tell the user that Watch Dog hit an error before you go on.` }
   })
 
   // ---- waiting for the person ----
