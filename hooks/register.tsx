@@ -419,6 +419,11 @@ export const register: Register = on => {
       await update($, turnA, t => ({ ...t, isRunning: true, id: e.turnId, text: e.text, startedAt: now, steps: 0, model, last: '' }))
       await update($, countsA, () => ({}))
       await update($, activeA, () => ({}))
+      // the todo list is the last turn's until the model writes a new one: show none rather than a stale count
+      await update($, todosA, m => {
+        const { main: _main, ...rest } = m
+        return rest
+      })
       await update($, sentA, () => 0)
       await update($, waitingA, () => ({}))
       await update($, stopsA, s => {
