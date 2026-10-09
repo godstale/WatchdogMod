@@ -264,3 +264,22 @@ test('/wd-log lists the calls made, and /wd-help answers', async ($, on) => {
   const help = await $.command.run({ command: 'wd-help', args: '작업 잠깐 멈추기', origin: COMPOSER, presentation: PRESENTATION })
   expect(help.text).toContain('/wd pause')
 })
+
+test("a new turn does not show the last turn's todo progress", async ($, on) => {
+  bottom(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'first', turnId: 't1' })
+  await $.tool.call({
+    tool: 'TodoWrite',
+    todos: [
+      { content: 'a', status: 'in_progress', activeForm: 'Doing a' },
+      { content: 'b', status: 'pending', activeForm: 'Doing b' },
+    ],
+  })
+  await $.turn.start({ text: 'second', turnId: 't2' })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /0\/2/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Working/ })).toBeDefined()
+  await ui.unmount()
+})
