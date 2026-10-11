@@ -6,7 +6,7 @@ import { ART_WIDTH, dog, dogRows } from './art'
 import type { DogSize, PixelRow } from './art'
 import { helpFor } from './help'
 import { LOG_KEEP, parseLogArgs, renderLog } from './log'
-import { notifyCommand } from './notify'
+import { notifyCommand, winScript } from './notify'
 import type { Os } from './notify'
 import { basename, fit, HELP, parseArgs } from './util'
 import type { Scope } from './util'
@@ -227,8 +227,9 @@ const saidWhileHeld = new Set<string>()
  */
 async function nap($: EngineInterface): Promise<void> {
   try {
-    const argv = (await hostOs($)) === 'windows' ? ['ping', '-n', '2', '127.0.0.1'] : ['sleep', '1']
-    await $.process.run(argv, { timeoutMs: 5000 })
+    const argv = (await hostOs($)) === 'windows' ? winScript($.plugin.root, 'nap.vbs') : ['sleep', '1']
+    const r = await $.process.run(argv, { timeoutMs: 5000 })
+    if (r.exitCode !== 0) await $.clock.sleep(250) // it could not wait (script host off): do not spin
   } catch {
     await $.clock.sleep(250)
   }
@@ -359,7 +360,7 @@ function hostOs($: EngineInterface): Promise<Os> {
  */
 async function notifyDesktop($: EngineInterface, title: string, body: string): Promise<void> {
   try {
-    const cmd = notifyCommand(await hostOs($), title, body)
+    const cmd = notifyCommand(await hostOs($), title, body, $.plugin.root)
     if (cmd !== undefined) {
       const r = await $.process.run(cmd.argv, { timeoutMs: 15_000, ...(cmd.env === undefined ? {} : { env: cmd.env }) })
       if (r.exitCode === 0) return
