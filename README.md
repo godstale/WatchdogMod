@@ -121,7 +121,7 @@ Claude Code 2.1.275 이상에서:
 
 Warning / Input 이 되면 OS 알림을 띄웁니다.
 
-* **Windows**: 토스트 (`powershell.exe` 의 WinRT, 알림 문구는 환경 변수로 넘겨 인용 문제 없음)
+* **Windows**: 토스트 (`wscript.exe` 가 숨김 창으로 `powershell.exe` 의 WinRT 를 실행해 콘솔 창이 뜨지 않음, 알림 문구는 환경 변수로 넘겨 인용 문제 없음)
 * **macOS**: `osascript` 의 `display notification`
 * 그 외 OS 이거나 위 명령이 실패하면 터미널 자체 알림 채널(`$.ui.notify`: iTerm2·kitty·ghostty·bell)로 대신 보냅니다.
 

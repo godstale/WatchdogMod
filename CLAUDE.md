@@ -48,6 +48,7 @@ claude plugin test .
 | `hooks/art.ts` | 픽셀 강아지 그림 (상태별 포즈와 색) |
 | `hooks/log.ts`, `hooks/help.ts` | `/wd-log`, `/wd-help` 출력 |
 | `hooks/notify.ts` | 데스크톱 알림 명령 (Windows 토스트, macOS osascript) |
+| `hooks/win/` | Windows 용 보조 스크립트 (`nap.vbs` 대기, `toast.vbs`/`toast.ps1` 알림). `wscript.exe` 로 돌려 콘솔 창이 뜨지 않게 함 |
 | `hooks/util.ts` | 글자 폭, 시간·모델 이름 포맷, `/wd` 인자 파싱 |
 | `commands/wd-test.md` | 대시보드 시험용 명령 (`/watchdog:wd-test`) |
 | `types/index.d.ts` | 플러그인 상태(`watchdog.*`) 타입 선언 |

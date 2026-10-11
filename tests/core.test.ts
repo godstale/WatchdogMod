@@ -317,21 +317,21 @@ describe('states', () => {
 })
 
 describe('desktop notification', () => {
-  test('Windows runs a PowerShell toast and passes the text through the environment', () => {
-    const cmd = notifyCommand('windows', 'Watch Dog', 'say "hi" & <b>')
-    expect(cmd?.argv[0]).toBe('powershell.exe')
+  test('Windows runs the toast through wscript (no console window) and passes the text through the environment', () => {
+    const cmd = notifyCommand('windows', 'Watch Dog', 'say "hi" & <b>', 'C:\\p')
+    expect(cmd?.argv).toEqual(['wscript.exe', '//B', '//Nologo', 'C:\\p\\hooks\\win\\toast.vbs'])
     expect(cmd?.env).toEqual({ WD_TITLE: 'Watch Dog', WD_BODY: 'say "hi" & <b>' })
     expect(cmd?.argv.join(' ')).not.toContain('say "hi"')
   })
 
   test('macOS runs osascript with the text as arguments', () => {
-    const cmd = notifyCommand('mac', 'Watch Dog', "it's here")
+    const cmd = notifyCommand('mac', 'Watch Dog', "it's here", '/p')
     expect(cmd?.argv[0]).toBe('osascript')
     expect(cmd?.argv.slice(-2)).toEqual(['Watch Dog', "it's here"])
   })
 
   test('elsewhere there is no command: the terminal channel is used', () => {
-    expect(notifyCommand('other', 'a', 'b')).toBeUndefined()
+    expect(notifyCommand('other', 'a', 'b', '/p')).toBeUndefined()
   })
 })
 

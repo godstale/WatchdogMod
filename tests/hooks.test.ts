@@ -150,7 +150,7 @@ test('a call that needs the person turns the dog to input, notifies the desktop,
 
   await $.tool.check({ tool: 'Bash', input: { command: 'npm test' }, tool_use_id: 'u1' })
   await new Promise<void>(done => setTimeout(() => done(), 50))
-  const toast = ran.find(argv => argv[0] === 'powershell.exe')
+  const toast = ran.find(argv => argv[0] === 'wscript.exe' && argv.at(-1)?.endsWith('toast.vbs') === true)
   expect(toast).toBeDefined()
 
   const waiting = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -167,7 +167,7 @@ test('a call that needs the person turns the dog to input, notifies the desktop,
 const wait = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
 const SPAWNED = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
-/** A wait that takes a little real time, as `ping`/`sleep` does, so a pause does not spin. */
+/** A wait that takes a little real time, as `wscript`/`sleep` does, so a pause does not spin. */
 function slowProcess(on: On) {
   on('env.get', () => ({ value: 'Windows_NT' }))
   on('process.run', async () => {
