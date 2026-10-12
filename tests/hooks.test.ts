@@ -9,11 +9,12 @@ const PRESENTATION = { isFullscreen: true, columns: 120 } as never
 
 /** What the engine answers for a tool call, by tool name; a test sets it to give a tool its result. */
 let answers: Record<string, unknown> = {}
+let clock: ReturnType<typeof mock.clock>
 
 /** What the engine answers beneath the plugin, so the session can start. */
 function bottom(on: On) {
   answers = {}
-  mock.clock(on, { now: 1_000 })
+  clock = mock.clock(on, { now: 1_000 })
   const session = mock.session(on)
   on('session.start', () => ({ cwd: '/' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -321,4 +322,41 @@ test('the Task tools drive the progress bar: TaskList sets it, TaskCreate and Ta
 
   const log = await $.command.run({ command: 'wd-log', args: '', origin: { kind: 'sdk' }, presentation: PRESENTATION })
   expect(log.text).toContain('TaskUpdate #3 deleted')
+})
+
+test('the time of the turn moves with the clock', async ($, on) => {
+  bottom(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'refactor auth', turnId: 't1' })
+  await clock.advance(3_000)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Working 00:03/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const ENDED = { sessionId: 's1', resume: {} } as never
+
+test('/clear does not stop the clock of the window: no session.start follows it', async ($, on) => {
+  bottom(on)
+  on('session.end', () => ENDED)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.end({ reason: 'clear' } as never)
+  await $.turn.start({ text: 'refactor auth', turnId: 't1' })
+  await clock.advance(5_000)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Working 00:05/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a timer that is gone is started again by the next turn, so the window does not freeze', async ($, on) => {
+  bottom(on)
+  on('session.end', () => ENDED)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.session.end({ reason: 'other' } as never) // the timer is cancelled, as when the worker was lost
+  await clock.advance(10_000)
+  await $.turn.start({ text: 'refactor auth', turnId: 't1' })
+  await clock.advance(5_000)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Working 00:05/ })).toBeDefined()
+  await ui.unmount()
 })

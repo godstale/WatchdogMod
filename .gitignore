@@ -1,5 +1,6 @@
 # Local type declarations copied from the Claude Code SDK (regenerated, never committed)
 .claude-plugin/types/
+/tsconfig.json
 
 # Dependencies and tool caches
 node_modules/
