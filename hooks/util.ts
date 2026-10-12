@@ -147,5 +147,6 @@ export const HELP = [
   '  /wd resume [main|agents|#2]     let it go on',
   '  /wd stop [main|agents|#2]       wrap up and stop (no new work, then a report)',
   '  /wd-log [main|agents|#2] [n]    the last actions of the main loop and the sub-agents (default 5)',
+  '  /wd-git-graph [count] [local]   branches and history of the repo as a graph (default 30)',
   '  /wd-help <what you want to do>  which command to use, ready to copy',
 ].join('\n')

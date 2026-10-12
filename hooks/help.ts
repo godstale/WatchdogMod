@@ -55,6 +55,16 @@ const TOPICS: Topic[] = [
     ],
   },
   {
+    id: 'git',
+    title: { ko: 'git 브랜치·히스토리를 한눈에 보기', en: 'See the branches and history of the repo' },
+    keys: [/깃|브랜치|커밋|그래프|머지|병합|저장소|레포/, /(git|branch|branches|commit|commits|graph|merge|repo|repository|tag)/i],
+    lines: [
+      { cmd: '/wd-git-graph', ko: '모든 브랜치·태그와 최근 30개 커밋을 그래프로', en: 'all branches and tags, latest 30 commits, as a graph' },
+      { cmd: '/wd-git-graph 100', ko: '커밋 100개까지 (최대 200)', en: 'up to 100 commits (200 at most)' },
+      { cmd: '/wd-git-graph local', ko: '원격 브랜치는 빼고 로컬만', en: 'local branches and tags only' },
+    ],
+  },
+  {
     id: 'test',
     title: { ko: '대시보드 시험', en: 'Try the dashboard' },
     keys: [/테스트|시험|시연|예제|해보|써보/, /\b(test|demo|try|example|sample)\b/i],
@@ -107,6 +117,6 @@ export function helpFor(message: string): string {
     text === ''
       ? isKo ? 'Watch Dog 명령 모음:' : 'Watch Dog commands:'
       : isKo ? `“${text}” 와 맞는 항목을 못 찾았습니다. 전체 명령:` : `Nothing matched “${text}”. All commands:`
-  const all = TOPICS.filter(t => ['say', 'pause', 'stop', 'log'].includes(t.id))
+  const all = TOPICS.filter(t => ['say', 'pause', 'stop', 'log', 'git'].includes(t.id))
   return [head, ...render(all, isKo), `  ${isKo ? '/wd-help <원하는 일>' : '/wd-help <what you want>'}`].join('\n')
 }

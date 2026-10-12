@@ -360,3 +360,48 @@ test('a timer that is gone is started again by the next turn, so the window does
   expect(await ui.find({ type: 'Text', text: /Working 00:05/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('/wd-git-graph asks git three times and draws what it answers', async ($, on) => {
+  bottom(on)
+  const ran: string[][] = []
+  const sep = '\x1f'
+  const log = [
+    ['b2', 'a1 c3', 'HEAD -> refs/heads/main, refs/remotes/origin/main', 'dev', '1700000000', 'Merge feature'].join(sep),
+    ['c3', 'a1', 'refs/heads/feature', 'dev', '1699999000', 'Feature work'].join(sep),
+    ['a1', '', 'tag: refs/tags/v1', 'dev', '1699998000', 'Start'].join(sep),
+  ].join('\n')
+  on('process.run', (_$, e) => {
+    ran.push([...e.argv])
+    const out: Record<string, string> = {
+      log,
+      status: '# branch.oid b2\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -0\n? new.txt\n',
+      'for-each-ref': '*\tmain\torigin/main\t[ahead 1]\tb2b2b2b\n \tfeature\t\t\tc3c3c3c\n',
+    }
+    return { value: { exitCode: 0, stdout: out[e.argv[1] ?? ''] ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const r = await $.command.run({ command: 'wd-git-graph', args: '5', origin: COMPOSER, presentation: PRESENTATION })
+  expect(ran.map(a => a[1]).sort()).toEqual(['for-each-ref', 'log', 'status'])
+  expect(ran.every(a => a[0] === 'git')).toBe(true)
+  expect(r.text).toContain('HEAD      main → origin/main ↑1')
+  expect(r.text).toContain('1 untracked')
+  expect(r.text).toContain('├─╮')
+  expect(r.text).toContain('[HEAD → main] [origin/main] Merge feature')
+  expect(r.text).toContain('[feature] Feature work')
+  expect(r.text).toContain('(v1) Start')
+
+  const bad = await $.command.run({ command: 'wd-git-graph', args: 'nope', origin: COMPOSER, presentation: PRESENTATION })
+  expect(bad.text).toContain('usage: /wd-git-graph')
+
+  // the row the command printed is drawn again with a colour for each branch; the transcript adds the plugin's name before the text
+  const row = { plugin: 'watchdog', component: 'CommandOutput', surface: 'terminal', props: { command: 'wd-git-graph', args: '5', text: `watchdog: ${r.text}`, isErrored: false } } as never
+  const drawn = await $.ui.mount(row)
+  const main = await drawn.find({ type: 'Text', text: /\[HEAD → main\]/ })
+  const side = await drawn.find({ type: 'Text', text: /\[feature\]/ })
+  expect(main?.props.color).toMatch(/^#[0-9a-f]{6}$/)
+  expect(side?.props.color).toMatch(/^#[0-9a-f]{6}$/)
+  expect(side?.props.color).not.toBe(main?.props.color)
+  expect(await drawn.find({ type: 'Text', text: /Merge feature/ })).toBeDefined()
+  await drawn.unmount()
+})

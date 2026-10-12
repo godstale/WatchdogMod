@@ -43,10 +43,11 @@ claude plugin test .
 | --- | --- |
 | `.claude-plugin/plugin.json` | 플러그인 매니페스트 (이름, 버전, 작성자, 타입 선언 경로) |
 | `.claude-plugin/marketplace.json` | 마켓플레이스 등록 정보 |
-| `hooks/register.tsx` | 진입점. 훅, `/wd` `/wd-log` `/wd-help` 명령, 화면 렌더 |
+| `hooks/register.tsx` | 진입점. 훅, `/wd` `/wd-log` `/wd-git-graph` `/wd-help` 명령, 화면 렌더 |
 | `hooks/view.ts` | 화면 행(row) 구성과 상태(mood) 판정 |
 | `hooks/art.ts` | 픽셀 강아지 그림 (상태별 포즈와 색) |
 | `hooks/log.ts`, `hooks/help.ts` | `/wd-log`, `/wd-help` 출력 |
+| `hooks/git.ts` | `/wd-git-graph`: git 출력 해석, 레인 배치, 그래프 문자열 (`git` 은 `Run` 으로 주입해 테스트) |
 | `hooks/notify.ts` | 데스크톱 알림 명령 (Windows 토스트, macOS osascript) |
 | `hooks/win/` | Windows 용 보조 스크립트 (`nap.vbs` 대기, `toast.vbs`/`toast.ps1` 알림). `wscript.exe` 로 돌려 콘솔 창이 뜨지 않게 함 |
 | `hooks/util.ts` | 글자 폭, 시간·모델 이름 포맷, `/wd` 인자 파싱 |
