@@ -396,13 +396,56 @@ async function clearWaiting($: EngineInterface, isDone: (id: string, w: WdWait) 
   )
 }
 
+const TICK_MS = 500
+/** A timer that has not ticked for this long is taken to be dead (a refused period ends it; a lost worker drops it). */
+const STALE_TICK_MS = 4000
+
+let timer: { cancel: () => void } | undefined
+let lastTickAt = 0
+
+function startTimer($: EngineInterface, now: number): void {
+  timer?.cancel()
+  lastTickAt = now
+  timer = $.clock.every(TICK_MS, () => {
+    void tick($)
+  })
+}
+
+/**
+ * Starts the clock of the window if it is not ticking. Every number of the window (the time
+ * of the turn, the dog's frame, the context) moves with that timer, and a timer set once in
+ * session.start can be gone later without a word, so the hooks that run during work check it.
+ */
+async function ensureTimer($: EngineInterface): Promise<void> {
+  await safe(async () => {
+    const now = await $.clock.now()
+    if (timer !== undefined && now - lastTickAt <= STALE_TICK_MS) return
+    startTimer($, now)
+    await update($, nowA, () => now)
+    await refreshUsage($)
+  })
+}
+
+/** The slow part of a tick (agents, usage); one at a time, so a stuck call cannot pile them up. */
+let isSlowBusy = false
+
 async function tick($: EngineInterface): Promise<void> {
   await safe(async () => {
     const now = await $.clock.now()
     tickN += 1
+    lastTickAt = now
     await update($, nowA, () => now)
-    if (tickN % 4 === 0) await syncAgents($)
-    if (tickN % 8 === 0) await refreshUsage($)
+    if (!isSlowBusy && (tickN % 4 === 0 || tickN % 8 === 0)) {
+      isSlowBusy = true
+      void safe(async () => {
+        try {
+          if (tickN % 4 === 0) await syncAgents($)
+          if (tickN % 8 === 0) await refreshUsage($)
+        } finally {
+          isSlowBusy = false
+        }
+      })
+    }
 
     const warnings = warningsOf(await snapOf($))
     for (const w of warnings) {
@@ -432,8 +475,6 @@ function cellProps(cell: { fg?: string; bg?: string }): { color?: string; backgr
 }
 
 export const register: Register = on => {
-  let timer: { cancel: () => void } | undefined
-
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'wd',
@@ -466,23 +507,24 @@ export const register: Register = on => {
     })
     await safe(() => refreshUsage($))
 
-    timer?.cancel()
-    timer = $.clock.every(500, () => {
-      void tick($)
-    })
+    startTimer($, await $.clock.now())
 
     return next(e)
   })
 
   on('session.end', ($, e, next) => {
-    timer?.cancel()
-    timer = undefined
+    // after /clear or a resume the process goes on and no session.start follows: the window still needs its clock
+    if (e.reason !== 'clear' && e.reason !== 'resume') {
+      timer?.cancel()
+      timer = undefined
+    }
     return next(e)
   })
 
   // ---- watching the work ----
 
   on('turn.start', async ($, e, next) => {
+    await ensureTimer($)
     await safe(async () => {
       const now = await $.clock.now()
       const model = await $.session.model()
@@ -513,6 +555,7 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
+    await ensureTimer($)
     // a model request follows only once every call of the loop was answered
     await clearWaiting($, (_id, w) => w.agentId === (e.agentId ?? ''))
     await safe(async () => {
@@ -531,6 +574,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    await ensureTimer($)
     await clearWaiting($, (_id, w) => w.agentId === (e.agentId ?? ''))
     await safe(async () => {
       if (e.agentId === undefined) {
@@ -562,6 +606,7 @@ export const register: Register = on => {
     const input = e as unknown as Record<string, unknown>
     const label = nameOf(e.tool)
     const brief = briefOf(e.tool, input)
+    await ensureTimer($)
     const refused = async (deny: string) => {
       await safe(async () => logStart($, key, { id: e.tool_use_id, at: await $.clock.now(), tool: label, label: brief, state: 'denied', endedAt: 0 }))
       return { deny }
@@ -624,6 +669,7 @@ export const register: Register = on => {
   // ---- waiting for the person ----
 
   on('tool.check', async ($, e, next) => {
+    await ensureTimer($)
     const verdict = await next(e)
     // `ask` on a real call puts a dialog (a permission, a question) in front of the person
     if (verdict.decision === 'ask' && e.tool_use_id !== undefined) {
