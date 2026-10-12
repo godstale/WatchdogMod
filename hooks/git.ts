@@ -152,9 +152,16 @@ const GLYPH: Record<number, string> = {
 }
 
 /** The colours of the branches, in the order the Git Graph of VS Code hands them out. */
-export const LANE_COLORS = ['#0085d9', '#d9008f', '#00d90a', '#d98500', '#a300d9', '#ff4d4d', '#00d9cc', '#e138e8', '#85d900', '#dc5b23', '#6f24d6', '#ffcc00']
+export const LANE_COLORS = ['#0085d9', '#d9008f', '#00d90a', '#d98500', '#a300d9', '#9aa0ff', '#00d9cc', '#e138e8', '#85d900', '#dc5b23', '#6f24d6', '#ffcc00']
 const TAG_COLOR = '#d7ba7d'
-export const laneColor = (n: number): string => LANE_COLORS[n % LANE_COLORS.length] ?? '#888888'
+/** The lane of the main branch: always red, a colour no other lane gets. */
+export const MAIN_LANE = -2
+const MAIN_COLOR = '#ff3b30'
+const NO_COLOR = -1
+export const laneColor = (n: number): string => (n === MAIN_LANE ? MAIN_COLOR : (LANE_COLORS[n % LANE_COLORS.length] ?? '#888888'))
+
+/** `main` or `master`, local or on a remote (`origin/main`). */
+const isMainRef = (r: GitRef): boolean => (r.kind === 'remote' ? /^[^/]+\/(?:main|master)$/ : /^(?:main|master)$/).test(r.name) && r.kind !== 'tag'
 
 /** A line from lane `from` on the row above to lane `to` on the row below, in a branch's colour. */
 type Edge = [from: number, to: number, color: number]
@@ -202,8 +209,8 @@ export type GraphLine = {
 }
 
 /**
- * The picture of the history, newest on top, one line per commit and a connector line where lanes
- * join (a branch point) or part (a merge). Every lane has a colour of its own: a branch tip opens
+ * The picture of the history, newest on top, one line per commit and a connector line under each,
+ * straight where lanes go on and bent where they join (a branch point) or part (a merge). Every lane has a colour of its own: a branch tip opens
  * a lane with a new colour, its first parent goes on in it, and the lane a merge parts into is new.
  * Needs the commits in topological order (children before parents), as `git log --topo-order` gives.
  */
@@ -228,6 +235,8 @@ export function layoutGraph(commits: GitCommit[], headHash = ''): { lines: Graph
       lanes[c] = cm.hash
       colors[c] = fresh++
     }
+    // from the tip of main down, its line is red (above it the line still belongs to the branch built on it)
+    if (cm.refs.some(isMainRef)) colors[c] = MAIN_LANE
     const mine = colors[c] ?? 0
 
     const row: GraphCell[] = new Array<GraphCell>(2 * lanes.length - 1).fill({ ch: ' ', color: -1 })
@@ -265,7 +274,8 @@ export function layoutGraph(commits: GitCommit[], headHash = ''): { lines: Graph
       }
       edges.push([c, j, k === 0 ? mine : (nextColors[j] ?? 0)])
     })
-    if (edges.some(([a, b]) => a !== b)) line(drawEdges(edges))
+    // a line between every two commits, as in VS Code: without it a straight history is a column of loose dots
+    if (edges.length > 0) line(drawEdges(edges))
     while (next.length > 0 && next[next.length - 1] === null) next.pop()
     lanes = next
     colors = nextColors.slice(0, next.length)
@@ -399,7 +409,7 @@ function graphSegs(line: GraphLine, width: number): Seg[] {
   const padding = Array.from({ length: Math.max(0, width - line.cells.length) }, (): GraphCell => ({ ch: ' ', color: -1 }))
   const out: Seg[] = []
   for (const cell of [...line.cells, ...padding]) {
-    const c = cell.color < 0 || cell.ch === ' ' ? undefined : laneColor(cell.color)
+    const c = cell.color === NO_COLOR || cell.ch === ' ' ? undefined : laneColor(cell.color)
     const last = out[out.length - 1]
     if (last !== undefined && last.c === c) last.t += cell.ch
     else out.push(c === undefined ? { t: cell.ch } : { t: cell.ch, c })

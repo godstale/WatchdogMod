@@ -4,7 +4,7 @@ import type { WdAgent, WdLog } from '../types'
 import { cells, fit, parseArgs, shortModel, untilReset } from '../hooks/util'
 import { helpFor } from '../hooks/help'
 import { parseLogArgs, renderLog } from '../hooks/log'
-import { agoShort, gitGraph, gitRows, laneColor, layoutGraph, parseBranches, parseGitLog, parseGraphArgs, parseRefs, parseStatus, renderGitGraph, rowsText } from '../hooks/git'
+import { agoShort, gitGraph, gitRows, LANE_COLORS, laneColor, layoutGraph, MAIN_LANE, parseBranches, parseGitLog, parseGraphArgs, parseRefs, parseStatus, renderGitGraph, rowsText } from '../hooks/git'
 import type { GitCommit, GitData, GitHead } from '../hooks/git'
 import { buildRows, fitRow, moodOf, rowWidth, warningsOf } from '../hooks/view'
 import { ART_WIDTH, dog, dogGridOf, dogRows } from '../hooks/art'
@@ -469,16 +469,16 @@ describe('/wd-git-graph', () => {
     ])
   })
 
-  test('a straight history is one lane, newest on top', () => {
+  test('a straight history is one lane, newest on top, its commits joined by a line', () => {
     const { lines, width } = layoutGraph([commit('c', ['b']), commit('b', ['a']), commit('a', [])])
-    expect(text(lines)).toEqual(['●', '●', '●'])
-    expect(lines.map(l => l.commit)).toEqual([0, 1, 2])
+    expect(text(lines)).toEqual(['●', '│', '●', '│', '●'])
+    expect(lines.map(l => l.commit)).toEqual([0, undefined, 1, undefined, 2])
     expect(width).toBe(1)
   })
 
   test('a merge parts into two lanes and a fork joins them again', () => {
     const { lines } = layoutGraph(forkAndMerge())
-    expect(text(lines)).toEqual(['●', '├─╮', '│ ●', '● │', '├─╯', '●'])
+    expect(text(lines)).toEqual(['●', '├─╮', '│ ●', '│ │', '● │', '├─╯', '●'])
     expect(lines.filter(l => l.commit !== undefined).map(l => l.commit)).toEqual([0, 1, 2, 3])
   })
 
@@ -492,7 +492,7 @@ describe('/wd-git-graph', () => {
 
   test('the commit HEAD is on is marked, and a lane of a cut history stays open', () => {
     const { lines } = layoutGraph([commit('b', ['a']), commit('x', ['gone'])], 'x')
-    expect(text(lines)).toEqual(['●', '│ ◉'])
+    expect(text(lines)).toEqual(['●', '│', '│ ◉', '│ │'])
   })
 
   test('the picture is made of box lines and commit marks only, and no row is wider than the picture', () => {
@@ -603,6 +603,23 @@ describe('/wd-git-graph', () => {
     expect(node(3)).toBe(node(0)) // the fork point is on main again
   })
 
+  test('main is always red, from its tip down, and no other lane is that colour', () => {
+    const lines = layoutGraph([
+      commit('f', ['b'], { refs: [{ kind: 'head', name: 'feature' }] }),
+      commit('b', ['a'], { refs: [{ kind: 'branch', name: 'main' }, { kind: 'remote', name: 'origin/main' }] }),
+      commit('a', []),
+    ]).lines
+    const node = (i: number) => lines.find(l => l.commit === i)?.color
+    expect(node(0)).not.toBe(MAIN_LANE) // above the tip of main the line is the feature's
+    expect(node(1)).toBe(MAIN_LANE)
+    expect(node(2)).toBe(MAIN_LANE)
+    expect(laneColor(MAIN_LANE)).toBe('#ff3b30')
+    expect(LANE_COLORS).not.toContain(laneColor(MAIN_LANE))
+    // a branch only named like main, or a tag, does not take the colour
+    const other = layoutGraph([commit('x', [], { refs: [{ kind: 'branch', name: 'feat/main' }, { kind: 'tag', name: 'main' }] })]).lines
+    expect(other[0]?.color).not.toBe(MAIN_LANE)
+  })
+
   test('two tips side by side get two colours, and the colours cycle through the palette', () => {
     const tips = layoutGraph([commit('x', ['base']), commit('y', ['base']), commit('base', [])]).lines.filter(l => l.commit !== undefined)
     expect(tips[0]?.color).not.toBe(tips[1]?.color)
@@ -627,13 +644,13 @@ describe('/wd-git-graph', () => {
     const rows = gitRows(d, 100, 1_000_000)
     expect(rowsText(rows)).toBe(renderGitGraph(d, 100, 1_000_000))
     const colorOf = (needle: string) => rows.flat().find(s => s.t.includes(needle))?.c
-    expect(colorOf('[HEAD → main]')).toBe(laneColor(0))
+    expect(colorOf('[HEAD → main]')).toBe(laneColor(MAIN_LANE))
     expect(colorOf('[feature]')).toBe(laneColor(1))
     expect(colorOf('[feature]')).not.toBe(colorOf('[HEAD → main]'))
-    expect(colorOf('(v1)')).not.toBe(laneColor(0)) // a tag has its own colour
+    expect(colorOf('(v1)')).not.toBe(laneColor(MAIN_LANE)) // a tag has its own colour
     // the merge line parting to the side branch is in that branch's colour, the node of main in main's
     const merge = rows.find(r => rowText0(r).startsWith('├─╮'))
-    expect(merge?.[0]?.c).toBe(laneColor(0))
+    expect(merge?.[0]?.c).toBe(laneColor(MAIN_LANE))
     expect(merge?.find(s => s.t.includes('╮'))?.c).toBe(laneColor(1))
     // the branch list names the branch in the colour of its lane, and flags what is not in sync
     expect(rows.flat().find(s => s.t === 'feature')?.c).toBe(laneColor(1))
