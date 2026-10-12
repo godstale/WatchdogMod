@@ -4,6 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { WdActive, WdAgent, WdLog, WdTask, WdTodo, WdTurn, WdUsage, WdWait } from '../types'
 import { ART_WIDTH, dog, dogRows } from './art'
 import type { DogSize, PixelRow } from './art'
+import { gitGraph, parseGraphArgs } from './git'
+import type { Run } from './git'
 import { helpFor } from './help'
 import { LOG_KEEP, parseLogArgs, renderLog } from './log'
 import { notifyCommand, winScript } from './notify'
@@ -489,6 +491,12 @@ export const register: Register = on => {
       immediate: true,
     })
     await $.command.register({
+      name: 'wd-git-graph',
+      description: 'Watch Dog: branches and history of the git repo as a graph, like VS Code Git Graph (default 30 commits)',
+      argumentHint: '[count] [local]',
+      immediate: true,
+    })
+    await $.command.register({
       name: 'wd-help',
       description: 'Watch Dog: which command does what you want, ready to copy',
       argumentHint: '<what you want to do>',
@@ -802,13 +810,20 @@ export const register: Register = on => {
     }
   })
 
-  // ---- /wd-log and /wd-help (they only read) ----
+  // ---- /wd-log, /wd-git-graph and /wd-help (they only read) ----
 
   on('command.run', { command: 'wd-log' }, async ($, e) => {
     const args = parseLogArgs(e.args)
     if ('error' in args) return { text: `Watch Dog: ${args.error}` }
     await safe(() => syncAgents($))
     return { text: renderLog(await snapOf($), args, await $.clock.now()) }
+  })
+
+  on('command.run', { command: 'wd-git-graph' }, async ($, e) => {
+    const args = parseGraphArgs(e.args)
+    if ('error' in args) return { text: `Watch Dog: ${args.error}` }
+    const run: Run = argv => $.process.run(argv, { timeoutMs: 15_000 })
+    return { text: await gitGraph(run, args, e.presentation.columns, Date.now()) }
   })
 
   on('command.run', { command: 'wd-help' }, (_$, e) => ({ text: helpFor(e.args) }))

@@ -4,6 +4,8 @@ import type { WdAgent, WdLog } from '../types'
 import { cells, fit, parseArgs, shortModel, untilReset } from '../hooks/util'
 import { helpFor } from '../hooks/help'
 import { parseLogArgs, renderLog } from '../hooks/log'
+import { agoShort, gitGraph, layoutGraph, parseBranches, parseGitLog, parseGraphArgs, parseRefs, parseStatus, renderGitGraph } from '../hooks/git'
+import type { GitCommit, GitData, GitHead } from '../hooks/git'
 import { buildRows, fitRow, moodOf, rowWidth, warningsOf } from '../hooks/view'
 import { ART_WIDTH, dog, dogGridOf, dogRows } from '../hooks/art'
 import { notifyCommand } from '../hooks/notify'
@@ -420,5 +422,180 @@ describe('/wd-help', () => {
       for (const c of ['say', 'pause', 'stop', '/wd-log']) expect(text).toContain(c)
     }
     expect(helpFor('xyzzy')).toContain('Nothing matched')
+  })
+})
+
+describe('/wd-git-graph', () => {
+  const commit = (hash: string, parents: string[], over: Partial<GitCommit> = {}): GitCommit => ({ hash, parents, refs: [], author: 'dev', at: 1_000, subject: `commit ${hash}`, ...over })
+  const text = (lines: { text: string }[]) => lines.map(l => l.text.trimEnd())
+  const forkAndMerge = () => [commit('m', ['b', 'f']), commit('f', ['base']), commit('b', ['base']), commit('base', [])]
+
+  test('arguments: count and scope in either order, nothing else', () => {
+    expect(parseGraphArgs('')).toEqual({ count: 30, scope: 'all' })
+    expect(parseGraphArgs('local 50')).toEqual({ count: 50, scope: 'local' })
+    expect(parseGraphArgs('999')).toEqual({ count: 200, scope: 'all' })
+    expect(parseGraphArgs('0')).toEqual({ count: 1, scope: 'all' })
+    expect('error' in parseGraphArgs('remote')).toBe(true)
+  })
+
+  test('refs are told apart by their full names, the current branch first, origin/HEAD left out', () => {
+    const refs = parseRefs('tag: refs/tags/v1.0, refs/remotes/origin/main, refs/remotes/origin/HEAD, refs/heads/feat/x, HEAD -> refs/heads/main')
+    expect(refs).toEqual([
+      { kind: 'head', name: 'main' },
+      { kind: 'branch', name: 'feat/x' },
+      { kind: 'remote', name: 'origin/main' },
+      { kind: 'tag', name: 'v1.0' },
+    ])
+    expect(parseRefs('HEAD')).toEqual([{ kind: 'head', name: 'HEAD' }])
+    expect(parseRefs('')).toEqual([])
+  })
+
+  test('the log, the status and the branch list are read as git prints them', () => {
+    const log = ['aaa', 'bbb ccc', 'HEAD -> refs/heads/main', 'Dev', '1700000000', 'Merge: a | b'].join('\x1f')
+    expect(parseGitLog(`${log}\r\n`)).toEqual([
+      { hash: 'aaa', parents: ['bbb', 'ccc'], refs: [{ kind: 'head', name: 'main' }], author: 'Dev', at: 1_700_000_000, subject: 'Merge: a | b' },
+    ])
+    const status = parseStatus(
+      ['# branch.oid abc1234', '# branch.head main', '# branch.upstream origin/main', '# branch.ab +2 -1', '# stash 3', '1 M. N... 100644 100644 100644 a b f1', '1 .M N... 100644 100644 100644 a b f2', '1 MM N... 100644 100644 100644 a b f3', 'u UU N... 1 2 3 4 a b c f4', '? new.txt'].join('\n'),
+    )
+    expect(status).toMatchObject({ branch: 'main', upstream: 'origin/main', ahead: 2, behind: 1, stash: 3, staged: 2, modified: 2, conflicted: 1, untracked: 1 })
+    expect(parseStatus('# branch.oid abc\n# branch.head (detached)').branch).toBe('')
+    const branches = parseBranches('*\tmain\torigin/main\t[ahead 2, behind 1]\tabc1234\n \tfeat\t\t\tdef5678\n \told\torigin/old\t[gone]\t0000000')
+    expect(branches.map(b => [b.name, b.isHead, b.ahead, b.behind, b.isGone])).toEqual([
+      ['main', true, 2, 1, false],
+      ['feat', false, 0, 0, false],
+      ['old', false, 0, 0, true],
+    ])
+  })
+
+  test('a straight history is one lane, newest on top', () => {
+    const { lines, width } = layoutGraph([commit('c', ['b']), commit('b', ['a']), commit('a', [])])
+    expect(text(lines)).toEqual(['●', '●', '●'])
+    expect(lines.map(l => l.commit)).toEqual([0, 1, 2])
+    expect(width).toBe(1)
+  })
+
+  test('a merge parts into two lanes and a fork joins them again', () => {
+    const { lines } = layoutGraph(forkAndMerge())
+    expect(text(lines)).toEqual(['●', '├─╮', '│ ●', '● │', '├─╯', '●'])
+    expect(lines.filter(l => l.commit !== undefined).map(l => l.commit)).toEqual([0, 1, 2, 3])
+  })
+
+  test('an octopus merge opens a lane for each parent', () => {
+    const { lines } = layoutGraph([commit('m', ['a', 'b', 'c']), commit('c', ['a']), commit('b', ['a']), commit('a', [])])
+    const rows = text(lines)
+    expect(rows[0]).toBe('●')
+    expect(rows[1]).toBe('├─┬─╮')
+    expect(rows.filter(r => r.includes('●')).length).toBe(4)
+  })
+
+  test('the commit HEAD is on is marked, and a lane of a cut history stays open', () => {
+    const { lines } = layoutGraph([commit('b', ['a']), commit('x', ['gone'])], 'x')
+    expect(text(lines)).toEqual(['●', '│ ◉'])
+  })
+
+  test('the picture is made of box lines and commit marks only, and no row is wider than the picture', () => {
+    const { lines, width } = layoutGraph(forkAndMerge())
+    for (const l of lines) {
+      expect(l.text).toMatch(/^[●◉│├╮╯╭╰┤┬┴┼─ ]+$/)
+      expect(cells(l.text)).toBeLessThanOrEqual(width)
+    }
+  })
+
+  const head = (over: Partial<GitHead> = {}): GitHead => ({ branch: 'main', oid: 'b', upstream: 'origin/main', ahead: 0, behind: 0, stash: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0, ...over })
+  const data = (over: Partial<GitData> = {}): GitData => ({
+    commits: [
+      commit('b', ['a'], { refs: [{ kind: 'head', name: 'main' }, { kind: 'remote', name: 'origin/main' }, { kind: 'tag', name: 'v1.0' }], subject: 'Add the thing' }),
+      commit('a', [], { subject: 'Initial commit' }),
+    ],
+    head: head(),
+    branches: [{ isHead: true, name: 'main', upstream: 'origin/main', ahead: 0, behind: 0, isGone: false, oid: 'bbbbbbb' }],
+    count: 30,
+    scope: 'all',
+    ...over,
+  })
+
+  test('the picture has a header with the state of the repo, the graph, and a legend', () => {
+    const out = renderGitGraph(data(), 100, 1_000_000)
+    expect(out).toContain('HEAD      main → origin/main in sync')
+    expect(out).toContain('Work tree clean')
+    expect(out).toContain('[HEAD → main] [origin/main] (v1.0) Add the thing')
+    expect(out).toContain('Initial commit')
+    expect(out).toContain('◉  ')
+    expect(out).toContain('● commit')
+    const dirty = renderGitGraph(data({ head: head({ branch: '', oid: 'b', staged: 2, modified: 1, untracked: 3, stash: 1, upstream: '' }) }), 100, 1_000_000)
+    expect(dirty).toContain('detached at b')
+    expect(dirty).toContain('2 staged, 1 modified, 3 untracked | stash 1')
+  })
+
+  test('a full page says there may be more commits', () => {
+    expect(renderGitGraph(data({ count: 2 }), 100, 1_000_000)).toContain('/wd-git-graph <n> for more')
+    expect(renderGitGraph(data({ count: 30 }), 100, 1_000_000)).not.toContain('for more')
+  })
+
+  test('the author column shows only with several authors and room to spare', () => {
+    const two = data({ commits: [commit('b', ['a'], { author: 'Alice Anderson', subject: 'Add the thing' }), commit('a', [], { author: 'Bob', subject: 'Initial commit' })] })
+    expect(renderGitGraph(two, 140, 1_000_000)).toContain('Alice Ander…')
+    expect(renderGitGraph(two, 60, 1_000_000)).not.toContain('Alice')
+    expect(renderGitGraph(data(), 140, 1_000_000)).not.toContain('dev')
+  })
+
+  test('every line fits the width, in English and in Korean, wide or narrow', () => {
+    const korean = data({
+      commits: [
+        commit('b', ['a'], {
+          subject: '인증 모듈을 리팩터링하고 테스트를 추가했습니다 그리고 더 길게',
+          refs: [{ kind: 'head', name: 'feature/아주-긴-브랜치-이름' }, { kind: 'remote', name: 'origin/main' }, { kind: 'tag', name: 'v1' }],
+        }),
+        commit('a', []),
+      ],
+    })
+    for (const cols of [50, 80, 140]) {
+      for (const d of [data(), korean]) {
+        for (const line of renderGitGraph(d, cols, 1_000_000).split('\n')) expect(cells(line)).toBeLessThanOrEqual(Math.max(40, cols - 6))
+      }
+    }
+  })
+
+  test('the lines of the screen are English: nothing is Korean but the commits themselves', () => {
+    expect(renderGitGraph(data(), 100, 1_000_000)).not.toMatch(/[가-힣]/)
+    expect(renderGitGraph(data({ commits: [] }), 100, 1_000_000)).toContain('(no commits)')
+  })
+
+  test('how long ago, in a few characters', () => {
+    expect([5, 90, 7_200, 3 * 86_400, 70 * 86_400, 800 * 86_400].map(agoShort)).toEqual(['5s ago', '1m ago', '2h ago', '3d ago', '2mo ago', '2y ago'])
+  })
+
+  test('a failed git comes back as a sentence, not a throw', async () => {
+    const fail = (stderr: string) => async () => ({ exitCode: 128, stdout: '', stderr })
+    const args = { count: 5, scope: 'all' } as const
+    expect(await gitGraph(fail('fatal: not a git repository (or any of the parent directories): .git'), args, 100, 0)).toContain('not inside a git repository')
+    expect(await gitGraph(fail("fatal: your current branch 'main' does not have any commits yet"), args, 100, 0)).toContain('no commits yet')
+    const broken = async (): Promise<never> => {
+      throw new Error('spawn git ENOENT')
+    }
+    expect(await gitGraph(broken, args, 100, 0)).toContain('could not run git')
+  })
+
+  test('local scope leaves the remotes out of the log call, all excludes the stash', async () => {
+    const calls: string[][] = []
+    const run = async (argv: string[]) => {
+      calls.push(argv)
+      return { exitCode: 0, stdout: '', stderr: '' }
+    }
+    await gitGraph(run, { count: 7, scope: 'local' }, 100, 0)
+    await gitGraph(run, { count: 7, scope: 'all' }, 100, 0)
+    const logs = calls.filter(c => c[1] === 'log')
+    expect(logs[0]).toContain('--branches')
+    expect(logs[0]).not.toContain('--all')
+    expect(logs[0]).toContain('7')
+    expect(logs[1]).toContain('--all')
+    expect(logs[1]).toContain('--exclude=refs/stash')
+  })
+
+  test('/wd-help points to it', () => {
+    expect(helpFor('git 브랜치 그래프 보여줘')).toContain('/wd-git-graph')
+    expect(helpFor('show me the branches and merges')).toContain('/wd-git-graph')
+    expect(helpFor('')).toContain('/wd-git-graph')
   })
 })
