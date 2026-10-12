@@ -4,7 +4,7 @@ import type { WdAgent, WdLog } from '../types'
 import { cells, fit, parseArgs, shortModel, untilReset } from '../hooks/util'
 import { helpFor } from '../hooks/help'
 import { parseLogArgs, renderLog } from '../hooks/log'
-import { agoShort, gitGraph, layoutGraph, parseBranches, parseGitLog, parseGraphArgs, parseRefs, parseStatus, renderGitGraph } from '../hooks/git'
+import { agoShort, gitGraph, gitRows, laneColor, layoutGraph, parseBranches, parseGitLog, parseGraphArgs, parseRefs, parseStatus, renderGitGraph, rowsText } from '../hooks/git'
 import type { GitCommit, GitData, GitHead } from '../hooks/git'
 import { buildRows, fitRow, moodOf, rowWidth, warningsOf } from '../hooks/view'
 import { ART_WIDTH, dog, dogGridOf, dogRows } from '../hooks/art'
@@ -428,6 +428,7 @@ describe('/wd-help', () => {
 describe('/wd-git-graph', () => {
   const commit = (hash: string, parents: string[], over: Partial<GitCommit> = {}): GitCommit => ({ hash, parents, refs: [], author: 'dev', at: 1_000, subject: `commit ${hash}`, ...over })
   const text = (lines: { text: string }[]) => lines.map(l => l.text.trimEnd())
+  const rowText0 = (row: { t: string }[]) => row.map(x => x.t).join('')
   const forkAndMerge = () => [commit('m', ['b', 'f']), commit('f', ['base']), commit('b', ['base']), commit('base', [])]
 
   test('arguments: count and scope in either order, nothing else', () => {
@@ -569,12 +570,12 @@ describe('/wd-git-graph', () => {
   test('a failed git comes back as a sentence, not a throw', async () => {
     const fail = (stderr: string) => async () => ({ exitCode: 128, stdout: '', stderr })
     const args = { count: 5, scope: 'all' } as const
-    expect(await gitGraph(fail('fatal: not a git repository (or any of the parent directories): .git'), args, 100, 0)).toContain('not inside a git repository')
-    expect(await gitGraph(fail("fatal: your current branch 'main' does not have any commits yet"), args, 100, 0)).toContain('no commits yet')
+    expect((await gitGraph(fail('fatal: not a git repository (or any of the parent directories): .git'), args, 100, 0)).text).toContain('not inside a git repository')
+    expect((await gitGraph(fail("fatal: your current branch 'main' does not have any commits yet"), args, 100, 0)).text).toContain('no commits yet')
     const broken = async (): Promise<never> => {
       throw new Error('spawn git ENOENT')
     }
-    expect(await gitGraph(broken, args, 100, 0)).toContain('could not run git')
+    expect((await gitGraph(broken, args, 100, 0)).text).toContain('could not run git')
   })
 
   test('local scope leaves the remotes out of the log call, all excludes the stash', async () => {
@@ -591,6 +592,52 @@ describe('/wd-git-graph', () => {
     expect(logs[0]).toContain('7')
     expect(logs[1]).toContain('--all')
     expect(logs[1]).toContain('--exclude=refs/stash')
+  })
+
+  test('each branch has a colour of its own, and a lane keeps it down the page', () => {
+    // main (m, b, base) with a side branch f that is merged into it: two lanes, two colours
+    const lines = layoutGraph(forkAndMerge()).lines
+    const node = (i: number) => lines.find(l => l.commit === i)?.color
+    expect(node(0)).toBe(node(2)) // m and b are on main
+    expect(node(1)).not.toBe(node(0)) // f is a branch of its own
+    expect(node(3)).toBe(node(0)) // the fork point is on main again
+  })
+
+  test('two tips side by side get two colours, and the colours cycle through the palette', () => {
+    const tips = layoutGraph([commit('x', ['base']), commit('y', ['base']), commit('base', [])]).lines.filter(l => l.commit !== undefined)
+    expect(tips[0]?.color).not.toBe(tips[1]?.color)
+    expect(laneColor(0)).not.toBe(laneColor(1))
+    expect(laneColor(0)).toBe(laneColor(12))
+  })
+
+  test('the rows are the same text as the plain answer, and carry the colour of their branch', () => {
+    const d = data({
+      commits: [
+        commit('m', ['b', 'f'], { subject: 'Merge feature', refs: [{ kind: 'head', name: 'main' }] }),
+        commit('f', ['base'], { subject: 'Feature work', refs: [{ kind: 'branch', name: 'feature' }] }),
+        commit('b', ['base'], { subject: 'Main work' }),
+        commit('base', [], { subject: 'Start', refs: [{ kind: 'tag', name: 'v1' }] }),
+      ],
+      head: head({ oid: 'm' }),
+      branches: [
+        { isHead: true, name: 'main', upstream: '', ahead: 0, behind: 0, isGone: false, oid: 'mmmmmmm' },
+        { isHead: false, name: 'feature', upstream: 'origin/feature', ahead: 2, behind: 0, isGone: false, oid: 'fffffff' },
+      ],
+    })
+    const rows = gitRows(d, 100, 1_000_000)
+    expect(rowsText(rows)).toBe(renderGitGraph(d, 100, 1_000_000))
+    const colorOf = (needle: string) => rows.flat().find(s => s.t.includes(needle))?.c
+    expect(colorOf('[HEAD → main]')).toBe(laneColor(0))
+    expect(colorOf('[feature]')).toBe(laneColor(1))
+    expect(colorOf('[feature]')).not.toBe(colorOf('[HEAD → main]'))
+    expect(colorOf('(v1)')).not.toBe(laneColor(0)) // a tag has its own colour
+    // the merge line parting to the side branch is in that branch's colour, the node of main in main's
+    const merge = rows.find(r => rowText0(r).startsWith('├─╮'))
+    expect(merge?.[0]?.c).toBe(laneColor(0))
+    expect(merge?.find(s => s.t.includes('╮'))?.c).toBe(laneColor(1))
+    // the branch list names the branch in the colour of its lane, and flags what is not in sync
+    expect(rows.flat().find(s => s.t === 'feature')?.c).toBe(laneColor(1))
+    expect(rows.flat().find(s => s.t.includes('origin/feature'))?.c).toBe('warning')
   })
 
   test('/wd-help points to it', () => {

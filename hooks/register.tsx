@@ -5,7 +5,7 @@ import type { WdActive, WdAgent, WdLog, WdTask, WdTodo, WdTurn, WdUsage, WdWait 
 import { ART_WIDTH, dog, dogRows } from './art'
 import type { DogSize, PixelRow } from './art'
 import { gitGraph, parseGraphArgs } from './git'
-import type { Run } from './git'
+import type { GitAnswer, Run } from './git'
 import { helpFor } from './help'
 import { LOG_KEEP, parseLogArgs, renderLog } from './log'
 import { notifyCommand, winScript } from './notify'
@@ -382,6 +382,10 @@ function segProps(seg: Seg): { color?: string; dimColor?: boolean; bold?: boolea
   if (seg.bold === true) p.bold = true
   return p
 }
+
+/** The latest answers of /wd-git-graph, kept to draw their rows in colour. */
+const gitViews: GitAnswer[] = []
+const GIT_VIEWS_KEPT = 5
 
 let tickN = 0
 const hinted = new Set<string>()
@@ -823,7 +827,33 @@ export const register: Register = on => {
     const args = parseGraphArgs(e.args)
     if ('error' in args) return { text: `Watch Dog: ${args.error}` }
     const run: Run = argv => $.process.run(argv, { timeoutMs: 15_000 })
-    return { text: await gitGraph(run, args, e.presentation.columns, Date.now()) }
+    const answer = await gitGraph(run, args, e.presentation.columns, Date.now())
+    // the text is what the model and a plain surface read; the coloured rows are drawn in its place (below)
+    if (answer.rows.length > 0) {
+      gitViews.unshift(answer)
+      gitViews.length = Math.min(gitViews.length, GIT_VIEWS_KEPT)
+    }
+    return { text: answer.text }
+  })
+
+  // the graph in the colours of its branches: drawn over the row the command printed, found by its text
+  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
+    if (e.props.command !== 'wd-git-graph' || e.props.isErrored) return next(e)
+    const shown = e.props.text.replace(/\s+/g, '')
+    const view = gitViews.find(v => shown.endsWith(v.text.replace(/\s+/g, '')))
+    if (view === undefined) return next(e) // after a reload the colours are gone; the plain text stays
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        {view.rows.map(row => (
+          <Box>
+            {row.map(seg => (
+              <Text {...segProps(seg)}>{seg.t}</Text>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    )
   })
 
   on('command.run', { command: 'wd-help' }, (_$, e) => ({ text: helpFor(e.args) }))

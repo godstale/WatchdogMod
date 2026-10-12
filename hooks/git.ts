@@ -4,6 +4,7 @@
  */
 
 import { cells, fit, pad } from './util'
+import type { Seg } from './view'
 
 export const GRAPH_DEFAULT = 30
 const GRAPH_MAX = 200
@@ -150,88 +151,127 @@ const GLYPH: Record<number, string> = {
   [U | D | R]: '├', [U | D | L]: '┤', [L | R | D]: '┬', [L | R | U]: '┴', [U | D | L | R]: '┼',
 }
 
-/** A line from lane `from` on the row above to lane `to` on the row below. */
-type Edge = [from: number, to: number]
+/** The colours of the branches, in the order the Git Graph of VS Code hands them out. */
+export const LANE_COLORS = ['#0085d9', '#d9008f', '#00d90a', '#d98500', '#a300d9', '#ff4d4d', '#00d9cc', '#e138e8', '#85d900', '#dc5b23', '#6f24d6', '#ffcc00']
+const TAG_COLOR = '#d7ba7d'
+export const laneColor = (n: number): string => LANE_COLORS[n % LANE_COLORS.length] ?? '#888888'
+
+/** A line from lane `from` on the row above to lane `to` on the row below, in a branch's colour. */
+type Edge = [from: number, to: number, color: number]
+
+/** One cell of the picture; `color` numbers the branch it belongs to, -1 for none. */
+export type GraphCell = { ch: string; color: number }
 
 /** Lanes sit two cells apart; each edge sets the arms of the cells it crosses, and the arms pick the glyph. */
-function drawEdges(edges: Edge[]): string {
+function drawEdges(edges: Edge[]): GraphCell[] {
   const width = edges.reduce((n, [a, b]) => Math.max(n, 2 * Math.max(a, b) + 1), 0)
   const arms = new Array<number>(width).fill(0)
-  for (const [from, to] of edges) {
+  const colors = new Array<number>(width).fill(-1)
+  const weight = new Array<number>(width).fill(0)
+  // where lines meet in one cell the strongest keeps it: a lane, then the end of a branch, then a line passing over
+  const set = (x: number, bits: number, color: number, strength: number): void => {
+    arms[x] = (arms[x] ?? 0) | bits
+    if (strength >= (weight[x] ?? 0)) {
+      colors[x] = color
+      weight[x] = strength
+    }
+  }
+  for (const [from, to, color] of edges) {
     const x1 = 2 * from
     const x2 = 2 * to
     if (from === to) {
-      arms[x1] = (arms[x1] ?? 0) | U | D
+      set(x1, U | D, color, 3)
       continue
     }
     const right = to > from
-    arms[x1] = (arms[x1] ?? 0) | U | (right ? R : L)
-    arms[x2] = (arms[x2] ?? 0) | D | (right ? L : R)
-    for (let x = Math.min(x1, x2) + 1; x < Math.max(x1, x2); x++) arms[x] = (arms[x] ?? 0) | L | R
+    set(x1, U | (right ? R : L), color, 2)
+    set(x2, D | (right ? L : R), color, 2)
+    for (let x = Math.min(x1, x2) + 1; x < Math.max(x1, x2); x++) set(x, L | R, color, 1)
   }
-  return arms.map(a => GLYPH[a] ?? ' ').join('')
+  return arms.map((a, x) => ({ ch: GLYPH[a] ?? ' ', color: colors[x] ?? -1 }))
 }
 
-export type GraphLine = { text: string; commit?: number }
+export type GraphLine = {
+  cells: GraphCell[]
+  /** The cells as plain text. */
+  text: string
+  /** The commit this line is the row of (an index of `commits`); none for a connector line. */
+  commit?: number
+  /** The colour of that commit's lane. */
+  color: number
+}
 
 /**
  * The picture of the history, newest on top, one line per commit and a connector line where lanes
- * join (a branch point) or part (a merge). `commit` names the line of a commit in `commits`.
+ * join (a branch point) or part (a merge). Every lane has a colour of its own: a branch tip opens
+ * a lane with a new colour, its first parent goes on in it, and the lane a merge parts into is new.
  * Needs the commits in topological order (children before parents), as `git log --topo-order` gives.
  */
 export function layoutGraph(commits: GitCommit[], headHash = ''): { lines: GraphLine[]; width: number } {
   /** The commit each lane waits for; null is a free lane. */
   let lanes: (string | null)[] = []
+  /** The colour of each lane (`lanes` side by side). */
+  let colors: number[] = []
+  let fresh = 0
   const lines: GraphLine[] = []
+  const line = (cs: GraphCell[], commit?: number, color = -1): void => {
+    lines.push({ cells: cs, text: cs.map(x => x.ch).join(''), color, ...(commit === undefined ? {} : { commit }) })
+  }
 
   commits.forEach((cm, index) => {
     // a commit is waited for in one lane at most (a parent found in a lane is shared, never added twice)
     let c = lanes.indexOf(cm.hash)
     if (c < 0) {
-      // nobody asked for it: the tip of a branch takes the first free lane
+      // nobody asked for it: the tip of a branch takes the first free lane and a colour of its own
       c = lanes.indexOf(null)
       if (c < 0) c = lanes.length
       lanes[c] = cm.hash
+      colors[c] = fresh++
     }
+    const mine = colors[c] ?? 0
 
-    const cells_ = new Array<string>(2 * lanes.length - 1).fill(' ')
+    const row: GraphCell[] = new Array<GraphCell>(2 * lanes.length - 1).fill({ ch: ' ', color: -1 })
     lanes.forEach((h, i) => {
-      if (h !== null) cells_[2 * i] = '│'
+      if (h !== null) row[2 * i] = { ch: '│', color: colors[i] ?? 0 }
     })
-    cells_[2 * c] = cm.hash === headHash ? '◉' : '●'
-    lines.push({ text: cells_.join(''), commit: index })
+    row[2 * c] = { ch: cm.hash === headHash ? '◉' : '●', color: mine }
+    line(row, index, mine)
 
     // the parents: the first goes on in the lane of the commit, the others part from it (a merge)
     const next = lanes.slice()
+    const nextColors = colors.slice()
     next[c] = null
     const edges: Edge[] = []
     lanes.forEach((h, i) => {
-      if (i !== c && h !== null) edges.push([i, i])
+      if (i !== c && h !== null) edges.push([i, i, colors[i] ?? 0])
     })
     ;[...new Set(cm.parents)].forEach((p, k) => {
       let j = next.indexOf(p)
       if (k === 0 && j > c) {
         // the first parent is already awaited to the right: that lane runs into this one, so the main line stays on the left
         next[c] = p
+        nextColors[c] = mine
         next[j] = null
         const at = edges.findIndex(([a, b]) => a === j && b === j)
         if (at >= 0) edges.splice(at, 1)
-        edges.push([c, c], [j, c])
+        edges.push([c, c, mine], [j, c, colors[j] ?? 0])
         return
       }
       if (j < 0) {
         j = next.findIndex((h, i) => h === null && i >= c)
         if (j < 0) j = next.length
         next[j] = p
+        nextColors[j] = k === 0 ? mine : fresh++
       }
-      edges.push([c, j])
+      edges.push([c, j, k === 0 ? mine : (nextColors[j] ?? 0)])
     })
-    if (edges.some(([a, b]) => a !== b)) lines.push({ text: drawEdges(edges) })
+    if (edges.some(([a, b]) => a !== b)) line(drawEdges(edges))
     while (next.length > 0 && next[next.length - 1] === null) next.pop()
     lanes = next
+    colors = nextColors.slice(0, next.length)
   })
 
-  const width = lines.reduce((n, l) => Math.max(n, cells(l.text)), 0)
+  const width = lines.reduce((n, l) => Math.max(n, l.cells.length), 0)
   return { lines, width }
 }
 
@@ -251,26 +291,43 @@ export function agoShort(seconds: number): string {
   return `${Math.floor(d / 365)}y ago`
 }
 
+/** A row of the answer as coloured pieces; its text is what the plain answer prints. */
+export type GitRow = Seg[]
+
+const dim = (t: string): Seg => ({ t, dim: true })
+const rowText = (row: GitRow): string => row.map(s => s.t).join('')
+const rowWidth = (row: GitRow): number => cells(rowText(row))
+
 function refLabel(r: GitRef): string {
   if (r.kind === 'head') return r.name === 'HEAD' ? '[HEAD]' : `[HEAD → ${r.name}]`
   if (r.kind === 'tag') return `(${r.name})`
   return `[${r.name}]`
 }
 
+/** A label in the colour of the branch it sits on; the one HEAD is on is bold, a remote one dim, a tag its own. */
+function refSeg(r: GitRef, color: string): Seg {
+  const t = refLabel(r)
+  if (r.kind === 'tag') return { t, c: TAG_COLOR }
+  if (r.kind === 'head') return { t, c: color, bold: true }
+  return r.kind === 'remote' ? { t, c: color, dim: true } : { t, c: color }
+}
+
 /** The labels that fit in `width`, whole; what does not fit is counted (`+2`). */
-function fitRefs(refs: GitRef[], width: number): string {
-  const labels = refs.map(refLabel)
-  const all = labels.join(' ')
-  if (cells(all) <= width) return all
-  const kept: string[] = []
-  for (const l of labels) {
-    const more = labels.length - kept.length - 1
-    const tail = more > 0 ? ` +${more}` : ''
-    if (cells([...kept, l].join(' ')) + cells(tail) > width) break
-    kept.push(l)
+function refSegs(refs: GitRef[], width: number, color: string): Seg[] {
+  const segs = refs.map(r => refSeg(r, color))
+  const spaced = (list: Seg[]): Seg[] => list.flatMap((s, i) => (i === 0 ? [s] : [{ t: ' ' }, s]))
+  if (cells(rowText(spaced(segs))) <= width) return spaced(segs)
+  const kept: Seg[] = []
+  for (const s of segs) {
+    const tail = segs.length - kept.length - 1 > 0 ? ` +${segs.length - kept.length - 1}` : ''
+    if (cells(rowText(spaced([...kept, s]))) + cells(tail) > width) break
+    kept.push(s)
   }
-  if (kept.length === 0) return fit(all, width)
-  return `${kept.join(' ')} +${labels.length - kept.length}`
+  if (kept.length === 0) {
+    const first = segs[0]
+    return first === undefined ? [] : [{ ...first, t: fit(rowText(spaced(segs)), width) }]
+  }
+  return [...spaced(kept), dim(` +${segs.length - kept.length}`)]
 }
 
 function sync(ahead: number, behind: number, upstream: string, isGone = false): string {
@@ -282,7 +339,17 @@ function sync(ahead: number, behind: number, upstream: string, isGone = false): 
 
 export type GitData = { commits: GitCommit[]; head: GitHead; branches: GitBranch[]; count: number; scope: GraphScope }
 
-function headerLines(d: GitData, room: number): string[] {
+/** The colour of each branch name seen in the graph: the lane its commit sits in. */
+function branchColors(d: GitData, lines: GraphLine[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const l of lines) {
+    const cm = l.commit === undefined ? undefined : d.commits[l.commit]
+    for (const r of cm?.refs ?? []) if (r.kind !== 'tag' && !out.has(r.name)) out.set(r.name, laneColor(l.color))
+  }
+  return out
+}
+
+function headerRows(d: GitData, room: number, colorOf: Map<string, string>): GitRow[] {
   const h = d.head
   const where = h.branch === '' ? `detached at ${h.oid.slice(0, 7)}` : h.branch
   const dirty = [
@@ -291,61 +358,99 @@ function headerLines(d: GitData, room: number): string[] {
     h.modified > 0 ? `${h.modified} modified` : '',
     h.untracked > 0 ? `${h.untracked} untracked` : '',
   ].filter(s => s !== '')
-  const lines = [
-    `Git graph: ${d.scope === 'all' ? 'all' : 'local'} branches, latest ${d.count} commits`,
-    `  HEAD      ${fit(`${where}${h.branch === '' ? '' : h.upstream === '' ? ' (no upstream)' : ` → ${sync(h.ahead, h.behind, h.upstream)}`}`, room - 12)}`,
-    `  Work tree ${fit(`${dirty.length === 0 ? 'clean' : dirty.join(', ')}${h.stash > 0 ? ` | stash ${h.stash}` : ''}`, room - 12)}`,
+  const headText = fit(`${where}${h.branch === '' ? '' : h.upstream === '' ? ' (no upstream)' : ` → ${sync(h.ahead, h.behind, h.upstream)}`}`, room - 12)
+  const headColor = colorOf.get(h.branch)
+  const treeText = fit(`${dirty.length === 0 ? 'clean' : dirty.join(', ')}${h.stash > 0 ? ` | stash ${h.stash}` : ''}`, room - 12)
+  const rows: GitRow[] = [
+    [{ t: 'Git graph', bold: true }, dim(`: ${d.scope === 'all' ? 'all' : 'local'} branches, latest ${d.count} commits`)],
+    [
+      dim('  HEAD      '),
+      headText.startsWith(where) ? { t: where, bold: true, ...(headColor === undefined ? {} : { c: headColor }) } : { t: '' },
+      { t: headText.startsWith(where) ? headText.slice(where.length) : headText },
+    ],
+    [dim('  Work tree '), { t: treeText, c: dirty.length === 0 ? 'success' : 'warning' }],
   ]
   if (d.branches.length > 0) {
-    const nameW = Math.min(28, d.branches.slice(0, BRANCHES_SHOWN).reduce((n, b) => Math.max(n, cells(b.name)), 0))
-    lines.push('  Branches')
-    for (const b of d.branches.slice(0, BRANCHES_SHOWN)) {
+    const shown = d.branches.slice(0, BRANCHES_SHOWN)
+    const nameW = Math.min(28, shown.reduce((n, b) => Math.max(n, cells(b.name)), 0))
+    rows.push([dim('  Branches')])
+    for (const b of shown) {
       const state = fit(sync(b.ahead, b.behind, b.upstream, b.isGone), room - nameW - 20)
-      lines.push(`    ${b.isHead ? '*' : ' '} ${pad(fit(b.name, nameW), nameW)}  ${b.oid}  ${state}`)
+      const isCalm = b.upstream === '' || (!b.isGone && b.ahead === 0 && b.behind === 0)
+      const c = colorOf.get(b.name)
+      rows.push([
+        { t: '    ' },
+        { t: b.isHead ? '*' : ' ', bold: true },
+        { t: ' ' },
+        { t: pad(fit(b.name, nameW), nameW), ...(c === undefined ? {} : { c }), ...(b.isHead ? { bold: true } : {}) },
+        { t: '  ' },
+        dim(b.oid),
+        { t: '  ' },
+        isCalm ? dim(state) : { t: state, c: 'warning' },
+      ])
     }
-    if (d.branches.length > BRANCHES_SHOWN) lines.push(`      … and ${d.branches.length - BRANCHES_SHOWN} more`)
+    if (d.branches.length > BRANCHES_SHOWN) rows.push([dim(`      … and ${d.branches.length - BRANCHES_SHOWN} more`)])
   }
-  return lines
+  return rows
 }
 
-/** The whole answer of the command: a header with the state of the repo, then the graph. */
-export function renderGitGraph(d: GitData, columns: number, nowMs: number): string {
-  const headHash = d.head.oid
-  const { lines: graph, width } = layoutGraph(d.commits, headHash)
+/** A line of the picture as pieces, each run of cells in the colour of its branch, padded to `width`. */
+function graphSegs(line: GraphLine, width: number): Seg[] {
+  const padding = Array.from({ length: Math.max(0, width - line.cells.length) }, (): GraphCell => ({ ch: ' ', color: -1 }))
+  const out: Seg[] = []
+  for (const cell of [...line.cells, ...padding]) {
+    const c = cell.color < 0 || cell.ch === ' ' ? undefined : laneColor(cell.color)
+    const last = out[out.length - 1]
+    if (last !== undefined && last.c === c) last.t += cell.ch
+    else out.push(c === undefined ? { t: cell.ch } : { t: cell.ch, c })
+  }
+  return out
+}
+
+/** The whole answer of the command as rows: a header with the state of the repo, then the graph. */
+export function gitRows(d: GitData, columns: number, nowMs: number): GitRow[] {
+  const { lines: graph, width } = layoutGraph(d.commits, d.head.oid)
   // the transcript marks its lines with a few cells of its own
   const room = Math.max(40, columns - 6)
   const authors = new Set(d.commits.map(c => c.author))
-  const out = [...headerLines(d, room), '']
+  const rows: GitRow[] = [...headerRows(d, room, branchColors(d, graph)), []]
 
   for (const g of graph) {
-    const art = pad(g.text, width)
-    if (g.commit === undefined) {
-      out.push(art.trimEnd())
+    const art = graphSegs(g, width)
+    const cm = g.commit === undefined ? undefined : d.commits[g.commit]
+    if (cm === undefined) {
+      rows.push(art)
       continue
     }
-    const cm = d.commits[g.commit]
-    if (cm === undefined) continue
-    const refs = cm.refs.map(refLabel).join(' ')
     const metaOf = (isWho: boolean): string => `${cm.hash.slice(0, 7)}${isWho ? `  ${pad(fit(cm.author, 12), 12)}` : ''}  ${agoShort(nowMs / 1000 - cm.at).padStart(7)}`
     const leftOf = (meta: string): number => room - width - 2 - cells(meta) - 2
     // the author is the first column to go when the subject would be squeezed
     let meta = metaOf(authors.size > 1)
     if (authors.size > 1 && leftOf(meta) < 40) meta = metaOf(false)
-    const left = leftOf(meta)
-    if (left < 20) {
-      // too narrow for a column of facts: the subject keeps the room
-      const text = `${refs === '' ? '' : `${refs} `}${cm.subject}`
-      out.push(`${art}  ${fit(text, Math.max(10, room - width - 2))}`)
-      continue
-    }
-    const refsCut = refs === '' ? '' : `${fitRefs(cm.refs, Math.max(Math.floor(left / 2), left - 30))} `
-    out.push(`${art}  ${pad(`${refsCut}${fit(cm.subject, left - cells(refsCut))}`, left)}  ${meta}`)
+    // too narrow for a column of facts: the subject keeps the room
+    const hasMeta = leftOf(meta) >= 20
+    const left = hasMeta ? leftOf(meta) : Math.max(10, room - width - 2)
+    const refs = cm.refs.length === 0 ? [] : refSegs(cm.refs, Math.max(Math.floor(left / 2), left - 30), laneColor(g.color))
+    const refsW = refs.length === 0 ? 0 : rowWidth(refs) + 1
+    const subject = fit(cm.subject, left - refsW)
+    const body: GitRow = [...refs, ...(refs.length === 0 ? [] : [{ t: ' ' }]), { t: subject }]
+    const gap = hasMeta ? left - rowWidth(body) : 0
+    rows.push([...art, { t: '  ' }, ...body, ...(hasMeta ? [{ t: ' '.repeat(Math.max(0, gap) + 2) }, dim(meta)] : [])])
   }
 
-  if (d.commits.length === 0) out.push('  (no commits)')
-  else if (d.commits.length >= d.count) out.push('', `  latest ${d.count} shown; /wd-git-graph <n> for more (max ${GRAPH_MAX})`)
-  out.push('', '  ● commit ◉ HEAD [branch] [remote] (tag)')
-  return out.join('\n')
+  if (d.commits.length === 0) rows.push([{ t: '  (no commits)' }])
+  else if (d.commits.length >= d.count) rows.push([], [dim(`  latest ${d.count} shown; /wd-git-graph <n> for more (max ${GRAPH_MAX})`)])
+  rows.push([], [dim('  ● commit ◉ HEAD [branch] [remote] (tag)')])
+  return rows
+}
+
+/** The plain-text form of `gitRows`, for a surface that cannot draw colours. */
+export function rowsText(rows: GitRow[]): string {
+  return rows.map(r => rowText(r).trimEnd()).join('\n')
+}
+
+export function renderGitGraph(d: GitData, columns: number, nowMs: number): string {
+  return rowsText(gitRows(d, columns, nowMs))
 }
 
 // ---- running git ----
@@ -361,8 +466,11 @@ function failure(r: RunResult): string {
   return `git failed (${fit(err.split(/\r?\n/)[0] ?? `exit ${r.exitCode}`, 80)}).`
 }
 
+/** What the command answers: the text, and the same as coloured rows when there is a graph to draw. */
+export type GitAnswer = { text: string; rows: GitRow[] }
+
 /** Reads the repo with three git calls and draws it; a failure comes back as a sentence, never a throw. */
-export async function gitGraph(run: Run, args: { count: number; scope: GraphScope }, columns: number, nowMs: number): Promise<string> {
+export async function gitGraph(run: Run, args: { count: number; scope: GraphScope }, columns: number, nowMs: number): Promise<GitAnswer> {
   const revs = args.scope === 'all' ? ['--exclude=refs/stash', '--all'] : ['--branches', '--tags', 'HEAD']
   try {
     const [log, status, branches] = await Promise.all([
@@ -370,13 +478,14 @@ export async function gitGraph(run: Run, args: { count: number; scope: GraphScop
       run(['git', 'status', '--porcelain=v2', '--branch', '--show-stash']),
       run(['git', 'for-each-ref', 'refs/heads', '--sort=-committerdate', `--format=${BRANCH_FORMAT}`]),
     ])
-    if (log.exitCode !== 0) return `Watch Dog: ${failure(log)}`
+    if (log.exitCode !== 0) return { text: `Watch Dog: ${failure(log)}`, rows: [] }
     const head = parseStatus(status.exitCode === 0 ? status.stdout : '')
     const found = branches.exitCode === 0 ? parseBranches(branches.stdout) : []
     // the branch HEAD is on comes first
     const sorted = [...found.filter(b => b.isHead), ...found.filter(b => !b.isHead)]
-    return renderGitGraph({ commits: parseGitLog(log.stdout), head, branches: sorted, count: args.count, scope: args.scope }, columns, nowMs)
+    const rows = gitRows({ commits: parseGitLog(log.stdout), head, branches: sorted, count: args.count, scope: args.scope }, columns, nowMs)
+    return { text: rowsText(rows), rows }
   } catch {
-    return 'Watch Dog: could not run git. Is it installed and on the PATH?'
+    return { text: 'Watch Dog: could not run git. Is it installed and on the PATH?', rows: [] }
   }
 }

@@ -393,4 +393,15 @@ test('/wd-git-graph asks git three times and draws what it answers', async ($, o
 
   const bad = await $.command.run({ command: 'wd-git-graph', args: 'nope', origin: COMPOSER, presentation: PRESENTATION })
   expect(bad.text).toContain('usage: /wd-git-graph')
+
+  // the row the command printed is drawn again with a colour for each branch; the transcript adds the plugin's name before the text
+  const row = { plugin: 'watchdog', component: 'CommandOutput', surface: 'terminal', props: { command: 'wd-git-graph', args: '5', text: `watchdog: ${r.text}`, isErrored: false } } as never
+  const drawn = await $.ui.mount(row)
+  const main = await drawn.find({ type: 'Text', text: /\[HEAD → main\]/ })
+  const side = await drawn.find({ type: 'Text', text: /\[feature\]/ })
+  expect(main?.props.color).toMatch(/^#[0-9a-f]{6}$/)
+  expect(side?.props.color).toMatch(/^#[0-9a-f]{6}$/)
+  expect(side?.props.color).not.toBe(main?.props.color)
+  expect(await drawn.find({ type: 'Text', text: /Merge feature/ })).toBeDefined()
+  await drawn.unmount()
 })
